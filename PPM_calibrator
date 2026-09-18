@@ -58,7 +58,6 @@ CONFIG_END_FREQ_MHZ   = 108.0
 CONFIG_STEP_MHZ       = 0.5
 CONFIG_INTERVAL_SEC   = 5
 CONFIG_SAMPLE_RATE_MHZ= 1.25
-CONFIG_GAIN_DB        = 50
 CONFIG_NUM_SAMPLES    = 65536
 # ==========================================
 
@@ -68,7 +67,10 @@ class CarrierFinder:
         self.sdr = RtlSdr()
         self.sdr.sample_rate = sample_rate
         self.sdr.center_freq = center_freq
-        self.sdr.gain = gain
+        if gain == "auto" or gain is None:
+           self.sdr.gain = "auto"
+        else:
+            self.sdr.gain = gain
         self.ppm = 0
         self._old_settings = None
 
@@ -222,8 +224,8 @@ def parse_args():
                    help=f"START_FREQ STOP_FREQ STEP - Use with --scan mode\nIf STEP omitted, uses (default {CONFIG_STEP_MHZ})")
     p.add_argument("-i", "--interval", type=float, default=CONFIG_INTERVAL_SEC,
                    help=f"Seconds between measurements (default {CONFIG_INTERVAL_SEC})")
-    p.add_argument("-g", "--gain", type=float, default=CONFIG_GAIN_DB,
-                   help=f"SDR Gain(default {CONFIG_GAIN_DB})")
+    p.add_argument("-g", "--gain", type=str, default="auto",
+                   help=f"SDR Gain(default is 'auto' for AGC (use -g number for fixed gain)")
     p.add_argument("--rate", "-R", type=float, default=CONFIG_SAMPLE_RATE_MHZ,
                    help=f"Sample rate in MHz (default {CONFIG_SAMPLE_RATE_MHZ})")
     p.add_argument("-n", "--samples", type=int, default=CONFIG_NUM_SAMPLES,
