@@ -29,7 +29,7 @@
 #                        If STEP omitted, uses (default uses CONFIG_STEP_MHZ)
 #  -i INTERVAL, --interval INTERVAL
 #                        Seconds between measurements (default uses CONFIG_INTERVAL_SEC)
-#  -g GAIN, --gain GAIN  SDR Gain(default uses CONFIG_GAIN_DB)
+#  -g GAIN, --gain GAIN  SDR Gain(default is 'auto' for AGC (use -g number for fixed gain))
 #  --rate RATE, -R RATE  Sample rate in MHz (default uses CONFIG_SAMPLE_RATE_MHZ)
 #  -n SAMPLES, --samples SAMPLES
 #                        Number of samples (default use CONFIG_NUM_SAMPLES)

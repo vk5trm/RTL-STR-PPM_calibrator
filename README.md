@@ -87,7 +87,7 @@ optional arguments:
                         If STEP omitted, uses (default 0.5)
   -i INTERVAL, --interval INTERVAL
                         Seconds between measurements (default 5)
-  -g GAIN, --gain GAIN  SDR Gain(default 50)
+  -g GAIN, --gain GAIN  SDR Gain( Default is 'auto' for AGC (use -g number for fixed gain))
   --rate RATE, -R RATE  Sample rate in MHz (default 1.25)
   -n SAMPLES, --samples SAMPLES
                         Number of samples (default 65536)
