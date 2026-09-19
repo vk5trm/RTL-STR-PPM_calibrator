@@ -59,7 +59,7 @@ Monitor the same frequency every 2 seconds:
 Sweep a range:
 
 ```bash
-./PPM_calibrator --scan 400 403 0.5
+./PPM_calibrator --scan 400 403
 ```
 
 Advanced options:
