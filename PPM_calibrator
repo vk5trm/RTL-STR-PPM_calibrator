@@ -191,11 +191,13 @@ class CarrierFinder:
 def parse_args():
     p = argparse.ArgumentParser(
         description="RTL-SDR carrier finder / PPM calibrator.",
-        epilog="Examples:\n"
-               "  ./PPM_calibrator 401.5               monitor 401.5 MHz\n"
-               "  ./PPM_calibrator 401.5 -i 2          monitor, update every 2 sec\n"
-               "  ./PPM_calibrator --scan 400 403      sweep 400 to 403 MHz\n"
-               "  ./PPM_calibrator --scan 400 403 0.5  sweep with custom step in MHZ\n",
+        epilog="While running in monitor or scan mode, you can adjust the PPM correction interactively:\n"
+        " +  or  =   : increase PPM by 1\n"
+        " -  or  _   : decrease PPM by 1\n"
+        " ]  or  .   : increase PPM by 10\n"
+        " [  or  ,   : decrease PPM by 10\n"
+        " 0          : reset PPM to 0\n"
+        " q          : quit\n",
         formatter_class=argparse.RawTextHelpFormatter)
 
     p.add_argument("freqs", nargs='*', type=float,
@@ -203,14 +205,14 @@ def parse_args():
                         "Monitor mode: <freq>\n"
                         "Scan mode: <start> <stop> [step]")
     
-    p.add_argument("--scan", "-s", action="store_true",
+    p.add_argument("-s", "--scan", action="store_true",
                    help="Sweep-scan mode instead of single frequency")
     
     p.add_argument("-i", "--interval", type=float, default="1",
                    help="Seconds between measurements (default 1 sec)")
     p.add_argument("-g", "--gain", type=str, default="auto",
                    help="SDR Gain (default is 'auto' for AGC)")
-    p.add_argument("--rate", "-R", type=float, default="1.25",
+    p.add_argument("-r", "--rate", type=float, default="1.25",
                    help="Sample rate in MHz (default 1.25 MHZ)")
     p.add_argument("-n", "--samples", type=int, default="65536",
                    help="Number of samples (default 65536)")

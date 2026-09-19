@@ -59,7 +59,7 @@ Monitor the same frequency every 2 seconds:
 Sweep a range:
 
 ```bash
-./PPM_calibrator --scan --range 400 403
+./PPM_calibrator --scan 400 403
 ```
 
 Advanced options:
@@ -71,6 +71,8 @@ Detailed help
 ```bash
 RTL-SDR carrier finder / PPM calibrator.
 
+usage: PPM_calibrator [-h] [--scan] [-i INTERVAL] [-g GAIN] [--rate RATE] [-n SAMPLES] [freqs ...]
+
 positional arguments:
   freqs                 Frequency arguments.
                         Monitor mode: <freq>
@@ -78,30 +80,22 @@ positional arguments:
 
 optional arguments:
   -h, --help            show this help message and exit
-  --scan, -s            Sweep-scan mode instead of single frequency
+  -s, --scan            Sweep-scan mode instead of single frequency
   -i INTERVAL, --interval INTERVAL
                         Seconds between measurements (default 1 sec)
   -g GAIN, --gain GAIN  SDR Gain (default is 'auto' for AGC)
-  --rate RATE, -R RATE  Sample rate in MHz (default 1.25 MHZ)
+  -r RATE, --rate RATE  Sample rate in MHz (default 1.25 MHZ)
   -n SAMPLES, --samples SAMPLES
                         Number of samples (default 65536)
 
-Examples:
-  ./PPM_calibrator 401.5               monitor 401.5 MHz
-  ./PPM_calibrator 401.5 -i 2          monitor, update every 2 sec
-  ./PPM_calibrator --scan 400 403      sweep 400 to 403 MHz
-  ./PPM_calibrator --scan 400 403 0.5  sweep with custom step in MHZ
-
-## Keyboard controls
-
 While running in monitor or scan mode, you can adjust the PPM correction interactively:
+ +  or  =   : increase PPM by 1
+ -  or  _   : decrease PPM by 1
+ ]  or  .   : increase PPM by 10
+ [  or  ,   : decrease PPM by 10
+ 0          : reset PPM to 0
+ q          : quit
 
-- `+` / `=` : increase PPM by 1
-- `-` / `_` : decrease PPM by 1
-- `]` / `.` : increase PPM by 10
-- `[` / `,` : decrease PPM by 10
-- `0` : reset PPM to 0
-- `q` : quit
 ```
 
 ## What the script reports
