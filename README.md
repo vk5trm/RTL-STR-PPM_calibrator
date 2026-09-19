@@ -59,7 +59,7 @@ Monitor the same frequency every 2 seconds:
 Sweep a range:
 
 ```bash
-./PPM_calibrator --scan --range 400 403 0.5
+./PPM_calibrator --scan --range 400 403
 ```
 
 Advanced options:
@@ -80,17 +80,17 @@ optional arguments:
   -h, --help            show this help message and exit
   --scan, -s            Sweep-scan mode instead of single frequency
   -i INTERVAL, --interval INTERVAL
-                        Seconds between measurements (default 1 SEC)
-  -g GAIN, --gain GAIN  SDR Gain (default is 'auto' for AGC, use -g number for fixed gain)
+                        Seconds between measurements (default 1 sec)
+  -g GAIN, --gain GAIN  SDR Gain (default is 'auto' for AGC)
   --rate RATE, -R RATE  Sample rate in MHz (default 1.25 MHZ)
   -n SAMPLES, --samples SAMPLES
                         Number of samples (default 65536)
 
 Examples:
-  ./PPM_calibrator 401.5              monitor 401.5 MHz
-  ./PPM_calibrator 401.5 -i 2         same, update every 2 s
-  ./PPM_calibrator --scan 400 403      sweep 400 to 403 MHz (step required)
-  ./PPM_calibrator --scan 400 403 0.5  sweep custom (step provided)
+  ./PPM_calibrator 401.5               monitor 401.5 MHz
+  ./PPM_calibrator 401.5 -i 2          monitor, update every 2 sec
+  ./PPM_calibrator --scan 400 403      sweep 400 to 403 MHz
+  ./PPM_calibrator --scan 400 403 0.5  sweep with custom step in MHZ
 
 ## Keyboard controls
 
@@ -109,16 +109,11 @@ While running in monitor or scan mode, you can adjust the PPM correction interac
 The tool prints the measured frequency and signal power, for example:
 
 ```text
-[2026-01-01 12:00:00] FREQUENCY: 401.500123 MHz | Power: -12.40 dB | PPM: 12
+[2026-01-01 12:00:00] FREQUENCY: 401.500123 MHz | Power: -12.40 dB | PPM: 1
 ```
 
 A measured frequency differing from the expected station frequency usually indicates the SDR's tuning offset needs calibration.
 
-## Notes
-
-- The default sample rate is 1.25 MHz and the default gain is Auto (AGC).
-- This project is designed for experimentation and calibration of RTL-SDR tuning accuracy.
-  
 ## Contributing
 
 Contributions are welcome! Please:
