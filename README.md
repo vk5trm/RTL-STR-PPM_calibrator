@@ -56,13 +56,7 @@ Monitor the same frequency every 2 seconds:
 ./PPM_calibrator 401.5 -i 2
 ```
 
-Sweep a frequency default range and find the strongest carrier:
-
-```bash
-./PPM_calibrator --scan
-```
-
-Sweep a custom range:
+Sweep a range:
 
 ```bash
 ./PPM_calibrator --scan --range 400 403 0.5
@@ -78,26 +72,26 @@ Detailed help
 RTL-SDR carrier finder / PPM calibrator.
 
 positional arguments:
-  freq                  Frequency to lock onto, in MHz (or Hz if > 1e6)
+  freqs                 Frequency arguments.
+                        Monitor mode: <freq>
+                        Scan mode: <start> <stop> [step]
 
 optional arguments:
   -h, --help            show this help message and exit
   --scan, -s            Sweep-scan mode instead of single frequency
-  --range ..., -r ...   START_FREQ STOP_FREQ STEP - Use with --scan mode
-                        If STEP omitted, uses (default 0.5)
   -i INTERVAL, --interval INTERVAL
-                        Seconds between measurements (default 5)
-  -g GAIN, --gain GAIN  SDR Gain( Default is 'auto' for AGC (use -g number for fixed gain))
-  --rate RATE, -R RATE  Sample rate in MHz (default 1.25)
+                        Seconds between measurements (default 1 SEC)
+  -g GAIN, --gain GAIN  SDR Gain (default is 'auto' for AGC, use -g number for fixed gain)
+  --rate RATE, -R RATE  Sample rate in MHz (default 1.25 MHZ)
   -n SAMPLES, --samples SAMPLES
                         Number of samples (default 65536)
 
 Examples:
   ./PPM_calibrator 401.5              monitor 401.5 MHz
   ./PPM_calibrator 401.5 -i 2         same, update every 2 s
-  ./PPM_calibrator --scan             sweep using CONFIG_ values
-  ./PPM_calibrator --scan -r 400 403 0.5 sweep custom (step provided)
-  ./PPM_calibrator --scan -r 400 403   sweep custom (step defaults)
+  ./PPM_calibrator --scan 400 403      sweep 400 to 403 MHz (step required)
+  ./PPM_calibrator --scan 400 403 0.5  sweep custom (step provided)
+
 ## Keyboard controls
 
 While running in monitor or scan mode, you can adjust the PPM correction interactively:
@@ -122,8 +116,7 @@ A measured frequency differing from the expected station frequency usually indic
 
 ## Notes
 
-- The default frequency range used for scan mode is 88.0 MHz to 108.0 MHz.
-- The default sample rate is 1.25 MHz and the default gain is 50 dB.
+- The default sample rate is 1.25 MHz and the default gain is Auto (AGC).
 - This project is designed for experimentation and calibration of RTL-SDR tuning accuracy.
   
 ## Contributing

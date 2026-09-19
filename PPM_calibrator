@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+#
+# RTL-SDR carrier finder / PPM calibrator.
+# Author: Robert Middelmann (vk5trm)
+#
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 2 of the License, or
@@ -12,37 +16,24 @@
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-
-# Author: Robert Middelmann (vk5trm)
-
-# RTL-SDR carrier finder / PPM calibrator.
-
-# Usage: PPM_calibrator [-h] [--scan] [--range RANGE RANGE RANGE] [-i INTERVAL] [-g GAIN] [--rate RATE] [-n SAMPLES] [freq]
-
-# Positional arguments:
-#  freq                  Frequency to lock onto, in MHz (or Hz if > 1e6)
-
-# optional arguments:
-#  -h, --help            show this help message and exit
-#  --scan, -s            Sweep-scan mode instead of single frequency
-#  --range ..., -r ...   START_FREQ STOP_FREQ STEP - Use with --scan mode
-#                        If STEP omitted, uses (default uses CONFIG_STEP_MHZ)
-#  -i INTERVAL, --interval INTERVAL
-#                        Seconds between measurements (default uses CONFIG_INTERVAL_SEC)
-#  -g GAIN, --gain GAIN  SDR Gain(default is 'auto' for AGC (use -g number for fixed gain))
-#  --rate RATE, -R RATE  Sample rate in MHz (default uses CONFIG_SAMPLE_RATE_MHZ)
-#  -n SAMPLES, --samples SAMPLES
-#                        Number of samples (default use CONFIG_NUM_SAMPLES)
-
-# Examples: ./PPM_calibrator 401.5 monitor 401.5 MHz 
-#           ./PPM_calibrator 401.5 -i 2 same, update every 2 s
-#           ./PPM_calibrator --scan sweep using CONFIG_ values 
-#           ./PPM_calibrator --scan --range 400 403 0.5 sweep using custom range
-
-
+#
+# ==========================================
 
 import numpy as np
-from rtlsdr import RtlSdr
+import rtlsdr.rtlsdr as _rtlsdr_mod
+_sync_names = ['RtlSdr', 'RtlSdrSync', 'RtlSdrDevice']
+RtlSdr = None
+for _name in _sync_names:
+    _cls = getattr(_rtlsdr_mod, _name, None)
+    if _cls and not _cls.__name__.endswith('Aio'):
+        RtlSdr = _cls
+        break
+
+if RtlSdr is None:
+    raise ImportError(
+        "Could not find synchronous RtlSdr class. "
+        "Update pyrtlsdr: pip3 install --upgrade pyrtlsdr"
+    )
 import time
 import sys
 import select
@@ -50,27 +41,24 @@ import termios
 import tty
 import argparse
 
-# ==========================================
-# CONFIGURATION SECTION
-# ==========================================
-CONFIG_START_FREQ_MHZ = 88.0
-CONFIG_END_FREQ_MHZ   = 108.0
-CONFIG_STEP_MHZ       = 0.5
-CONFIG_INTERVAL_SEC   = 5
-CONFIG_SAMPLE_RATE_MHZ= 1.25
-CONFIG_NUM_SAMPLES    = 65536
-# ==========================================
-
-
 class CarrierFinder:
     def __init__(self, center_freq=100e6, sample_rate=2.4e6, gain=50):
         self.sdr = RtlSdr()
         self.sdr.sample_rate = sample_rate
         self.sdr.center_freq = center_freq
-        if gain == "auto" or gain is None:
-           self.sdr.gain = "auto"
+        
+        if str(gain).lower() == "auto" or gain is None:
+            self.sdr.gain = "auto"
+            self.is_agc = True
         else:
-            self.sdr.gain = gain
+            try:
+                self.sdr.gain = float(gain)
+                self.is_agc = False
+            except (ValueError, TypeError):
+                print(f"Warning: Invalid gain '{gain}'. Falling back to AGC.")
+                self.sdr.gain = "auto"
+                self.is_agc = True
+        
         self.ppm = 0
         self._old_settings = None
 
@@ -105,7 +93,6 @@ class CarrierFinder:
 
     def measure_at(self, nominal_hz, num_samples):
         """Measure power and precise frequency at a specific nominal frequency."""
-        # Use actual hardware sample rate for accurate bin calculation
         actual_sample_rate = self.sdr.get_sample_rate()
         
         ppm_factor = 1 + (self.ppm * 1e-6)
@@ -113,14 +100,11 @@ class CarrierFinder:
         self.sdr.center_freq = tuned_hz
         samples = self.sdr.read_samples(num_samples)
         power = np.mean(np.abs(samples) ** 2)
-        
         x = samples - np.mean(samples)
         fft_data = np.fft.fftshift(np.fft.fft(x))
         mag = np.abs(fft_data)
         n = len(samples)
         peak_idx = int(np.argmax(mag))
-        
-        # CRITICAL FIX: Use actual hardware sample rate instead of requested rate
         bin_hz = actual_sample_rate / n
         offset_hz = (peak_idx - n // 2) * bin_hz
         precise_freq = tuned_hz + offset_hz
@@ -151,8 +135,9 @@ class CarrierFinder:
     def continuous_monitor(self, nominal_hz, interval, num_samples):
         self._setup_terminal()
         actual_rate = self.sdr.get_sample_rate()
+        gain_display = "AGC" if self.is_agc else f"{self.sdr.gain:.1f} dB"
         print(f"Monitoring single frequency: {nominal_hz/1e6:.6f} MHz")
-        print(f"Actual Sample Rate: {actual_rate/1e6:.12f} MHz | Interval: {interval}s | Samples: {num_samples}")
+        print(f"Actual Sample Rate: {actual_rate/1e6:.12f} MHz | Samples: {num_samples} | Gain: {gain_display}")
         print("Keys: +/- = PPM 1   ]/. = PPM 10   [/ , = PPM -10   0 = reset")
         print("Adjust PPM until FREQUENCY matches expected station freq")
         print("Press Q to QUIT\n")
@@ -161,7 +146,6 @@ class CarrierFinder:
                 power, precise_freq, actual_rate = self.measure_at(nominal_hz, num_samples)
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                 power_db = 10 * np.log10(power) if power > 0 else -999
-                # Use the rate returned by measure_at (which calls get_sample_rate() internally)
                 print(f"[{timestamp}] FREQUENCY: {precise_freq/1e6:.6f} MHz | "
                       f"Power: {power_db:.2f} dB | PPM: {self.ppm}")
                 end_time = time.time() + interval
@@ -176,8 +160,9 @@ class CarrierFinder:
     def continuous_scan(self, start_freq, end_freq, step, interval, num_samples):
         self._setup_terminal()
         actual_rate = self.sdr.get_sample_rate()
+        gain_display = "AGC" if self.is_agc else f"{self.sdr.gain:.1f} dB"
         print(f"Continuous scan: {start_freq/1e6:.1f} - {end_freq/1e6:.1f} MHz")
-        print(f"Actual Sample Rate: {actual_rate/1e6:.12f} MHz | Step: {step/1e6:.3f} MHz | Interval: {interval}s")
+        print(f"Actual Sample Rate: {actual_rate/1e6:.12f} MHz | Step: {step/1e6:.3f} MHz | Gain: {gain_display}")
         print("Keys: +/- PPM adjustment")
         print("Adjust PPM until FREQUENCY matches expected station freq")
         print("Press Q to QUIT\n")
@@ -203,63 +188,68 @@ class CarrierFinder:
 
     def close(self):
         self.sdr.close()
-
-
 def parse_args():
     p = argparse.ArgumentParser(
         description="RTL-SDR carrier finder / PPM calibrator.",
         epilog="Examples:\n"
                "  ./PPM_calibrator 401.5              monitor 401.5 MHz\n"
                "  ./PPM_calibrator 401.5 -i 2         same, update every 2 s\n"
-               "  ./PPM_calibrator --scan             sweep using CONFIG_ values\n"
-               "  ./PPM_calibrator --scan -r 400 403 0.5 sweep custom (step provided)\n"
-               "  ./PPM_calibrator --scan -r 400 403   sweep custom (step defaults)\n",
+               "  ./PPM_calibrator --scan 400 403      sweep 400 to 403 MHz (step required)\n"
+               "  ./PPM_calibrator --scan 400 403 0.5  sweep custom (step provided)\n",
         formatter_class=argparse.RawTextHelpFormatter)
+
+    p.add_argument("freqs", nargs='*', type=float,
+                   help="Frequency arguments.\n"
+                        "Monitor mode: <freq>\n"
+                        "Scan mode: <start> <stop> [step]")
     
-    p.add_argument("freq", nargs="?", type=float,
-                   help="Frequency to lock onto, in MHz (or Hz if > 1e6)")
     p.add_argument("--scan", "-s", action="store_true",
                    help="Sweep-scan mode instead of single frequency")
-    p.add_argument("--range", "-r", nargs=argparse.REMAINDER, type=float,
-                   help=f"START_FREQ STOP_FREQ STEP - Use with --scan mode\nIf STEP omitted, uses (default {CONFIG_STEP_MHZ})")
-    p.add_argument("-i", "--interval", type=float, default=CONFIG_INTERVAL_SEC,
-                   help=f"Seconds between measurements (default {CONFIG_INTERVAL_SEC})")
+    
+    p.add_argument("-i", "--interval", type=float, default="1",
+                   help="Seconds between measurements (default 1 SEC)")
     p.add_argument("-g", "--gain", type=str, default="auto",
-                   help=f"SDR Gain(default is 'auto' for AGC (use -g number for fixed gain)")
-    p.add_argument("--rate", "-R", type=float, default=CONFIG_SAMPLE_RATE_MHZ,
-                   help=f"Sample rate in MHz (default {CONFIG_SAMPLE_RATE_MHZ})")
-    p.add_argument("-n", "--samples", type=int, default=CONFIG_NUM_SAMPLES,
-                   help=f"Number of samples (default {CONFIG_NUM_SAMPLES})")
+                   help="SDR Gain (default is 'auto' for AGC, use -g number for fixed gain)")
+    p.add_argument("--rate", "-R", type=float, default="1.25",
+                   help="Sample rate in MHz (default 1.25 MHZ)")
+    p.add_argument("-n", "--samples", type=int, default="65536",
+                   help="Number of samples (default 65536)")
+    
     args = p.parse_args()
 
     start_freq = end_freq = step = None
     first_tune = None
     mode = None
+    
+    vals = args.freqs
 
     if args.scan:
         mode = "scan"
-        if args.range:
-            if len(args.range) < 2:
-                p.error("--scan -r requires at least START and END frequencies.")
-            start_freq = args.range[0] * 1e6
-            end_freq = args.range[1] * 1e6
-            if len(args.range) >= 3:
-                step = args.range[2] * 1e6
-            else:
-                step = CONFIG_STEP_MHZ * 1e6
+        if len(vals) < 2:
+            p.error("--scan requires START and STOP frequencies.")
+        
+        start_freq = vals[0] * 1e6
+        end_freq = vals[1] * 1e6
+        
+        if len(vals) >= 3:
+            step = vals[2] * 1e6
         else:
-            start_freq = CONFIG_START_FREQ_MHZ * 1e6
-            end_freq = CONFIG_END_FREQ_MHZ * 1e6
-            step = CONFIG_STEP_MHZ * 1e6
+            step = 0.5 * 1e6
+            
         first_tune = start_freq
+        
+        if start_freq >= end_freq:
+             p.error("START frequency must be less than STOP frequency.")
+
     else:
         mode = "monitor"
-        if args.freq is None:
-            p.error("Use PPM_calibrator -h for detailed help")
-        first_tune = args.freq if args.freq > 1e6 else args.freq * 1e6
+        if len(vals) != 1:
+            p.error("Monitor mode requires exactly one frequency argument.")
+        
+        freq_val = vals[0]
+        first_tune = freq_val if freq_val > 1e6 else freq_val * 1e6
 
     return args, mode, start_freq, end_freq, step, first_tune
-
 
 if __name__ == "__main__":
     args, mode, start_freq, end_freq, step, first_tune = parse_args()
