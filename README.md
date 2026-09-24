@@ -1,17 +1,12 @@
 # RTL-STR-PPM_calibrator
 
-Signal finder and calibrator for RTL-SDR devices.
+Signal finder and PPM calibrator for RTL-SDR devices.
 
-This utility helps you identify strong carriers near a tuned frequency and adjust the SDR's frequency correction (PPM) until the measured frequency matches the expected station frequency.
-
-It can run in two modes:
-
-- Monitor mode: lock onto a single frequency and continuously report the detected carrier frequency and power.
-- Scan mode: sweep a frequency range and find the strongest signal in that band.
+This utility helps you tune to a frequency and adjust the SDR's frequency correction (PPM) until the measured frequency matches the expected station frequency.
 
 ## Features
 
-- Tune to a specific RF frequency or sweep a range
+- Tune to a specific RF frequency
 - Measure received power and the precise peak frequency
 - Adjust frequency correction in real time using keyboard controls
 - Useful for calibrating RTL-SDR PPM offset
@@ -56,10 +51,10 @@ Monitor the same frequency every 2 seconds:
 ./PPM_calibrator 401.5 -i 2
 ```
 
-Sweep a range:
+Set the frequency and gain and monitor every 2 secconds:
 
 ```bash
-./PPM_calibrator --scan 400 403
+./PPM_calibrator -g 20 -i 2 401.5
 ```
 
 Advanced options:
@@ -74,13 +69,10 @@ RTL-SDR carrier finder / PPM calibrator.
 usage: PPM_calibrator [-h] [--scan] [-i INTERVAL] [-g GAIN] [--rate RATE] [-n SAMPLES] [freqs ...]
 
 positional arguments:
-  freqs                 Frequency arguments.
-                        Monitor mode: <freq>
-                        Scan mode: <start> <stop> [step]
+  freq                  Frequency argument.
 
 optional arguments:
   -h, --help            show this help message and exit
-  -s, --scan            Sweep-scan mode instead of single frequency
   -i INTERVAL, --interval INTERVAL
                         Seconds between measurements (default 1 sec)
   -g GAIN, --gain GAIN  SDR Gain (default is 'auto' for AGC)
@@ -88,13 +80,14 @@ optional arguments:
   -n SAMPLES, --samples SAMPLES
                         Number of samples (default 65536)
 
-While running in monitor or scan mode, you can adjust the PPM correction interactively:
+While running you can adjust the PPM correction interactively:
  +  or  =   : increase PPM by 1
  -  or  _   : decrease PPM by 1
  ]  or  .   : increase PPM by 10
  [  or  ,   : decrease PPM by 10
  0          : reset PPM to 0
  q          : quit
+
 
 ```
 
@@ -103,7 +96,14 @@ While running in monitor or scan mode, you can adjust the PPM correction interac
 The tool prints the measured frequency and signal power, for example:
 
 ```text
-[2026-01-01 12:00:00] FREQUENCY: 401.500123 MHz | Power: -12.40 dB | PPM: 1
+Monitoring: 402.000000 MHz
+Actual Sample Rate: 1.250000002070 MHz | Samples: 65536 | Gain: AGC
+Keys: +/- = PPM 1   ]/. = PPM 10   [/ , = PPM -10   0 = reset
+Adjust PPM until OFFSET is as close to ZERO as you can or
+until FREQUENCY matches expected station freq
+Press Q to QUIT
+
+[2026-01-01 12:00:00] FREQUENCY: 401.999981 MHz | OFFSET: -19.07 Hz | Power: 0.72 dB | PPM: -2
 ```
 
 A measured frequency differing from the expected station frequency usually indicates the SDR's tuning offset needs calibration.
