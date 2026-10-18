@@ -112,11 +112,65 @@ class CarrierFinder:
 
         return power, precise_freq, actual_sample_rate, offset_hz
 
+    def measure_multiple(self, nominal_hz_list, num_samples):
+        """Measure power and precise frequency for several nominal frequencies in one capture.
+           nominal_hz_list: list of frequencies in Hz.
+        """
+        # center at midpoint so all targets fit in the instantaneous bandwidth
+        center = (min(nominal_hz_list) + max(nominal_hz_list)) / 2.0
+        self.sdr.center_freq = center
+        actual_sample_rate = self.sdr.get_sample_rate()
+        samples = self.sdr.read_samples(num_samples)
+
+        x = samples - np.mean(samples)
+        fft_data = np.fft.fftshift(np.fft.fft(x))
+        mag = np.abs(fft_data)
+
+        n = len(samples)
+        bin_hz = actual_sample_rate / n
+        freqs = center + (np.arange(n) - n // 2) * bin_hz
+
+        results = []
+        for nom in nominal_hz_list:
+            # find nearest bin to the nominal frequency
+            idx_nom = int(np.argmin(np.abs(freqs - nom)))
+            # small search window around expected bin to find the precise peak
+            win_bins = max(4, int(2.0 / max(bin_hz, 1e-12)))
+            lo = max(0, idx_nom - win_bins)
+            hi = min(n, idx_nom + win_bins + 1)
+            rel = int(np.argmax(mag[lo:hi]))
+            peak_idx = lo + rel
+            peak_freq = freqs[peak_idx]
+            offset_hz = peak_freq - nom
+            # estimate power (mean power across the capture)
+            power = np.mean(np.abs(samples) ** 2)
+            results.append({
+                "nominal": nom,
+                "peak_freq": peak_freq,
+                "offset_hz": offset_hz,
+                "power": power,
+                "peak_bin_mag": float(mag[peak_idx])
+            })
+
+        return results, actual_sample_rate
+
     def continuous_monitor(self, nominal_hz, interval, num_samples):
+        """If nominal_hz is a list, monitor multiple frequencies in the same capture."""
         self._setup_terminal()
-        actual_rate = self.sdr.get_sample_rate()
         gain_display = "AGC" if self.is_agc else f"{self.sdr.gain:.1f} dB"
-        print(f"Monitoring: {nominal_hz/1e6:.6f} MHz")
+
+        multi = isinstance(nominal_hz, (list, tuple))
+        if multi:
+            freqs_mhz = ", ".join(f"{f/1e6:.6f}" for f in nominal_hz)
+            print(f"Monitoring multiple: {freqs_mhz} MHz")
+            # set center once at midpoint
+            center = (min(nominal_hz) + max(nominal_hz)) / 2.0
+            self.sdr.center_freq = center
+        else:
+            print(f"Monitoring: {nominal_hz/1e6:.6f} MHz")
+            self.sdr.center_freq = nominal_hz
+
+        actual_rate = self.sdr.get_sample_rate()
         print(f"Actual Sample Rate: {actual_rate/1e6:.12f} MHz | Samples: {num_samples} | Gain: {gain_display}")
         print("Keys: +/- = PPM 1   ]/. = PPM 10   [/ , = PPM -10   0 = reset")
         print("Adjust PPM until OFFSET is as close to ZERO as you can or")
@@ -124,11 +178,21 @@ class CarrierFinder:
         print("Press Q to QUIT\n")
         try:
             while True:
-                power, precise_freq, actual_rate, offset_hz = self.measure_at(nominal_hz, num_samples)
-                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                power_db = 10 * np.log10(power) if power > 0 else -999
-                print(f"[{timestamp}] FREQUENCY: {precise_freq/1e6:.6f} MHz | "
-                      f"OFFSET: {offset_hz:.2f} Hz | Power: {power_db:.2f} dB | PPM: {self.ppm}")
+                if multi:
+                    results, actual_rate = self.measure_multiple(nominal_hz, num_samples)
+                    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                    print(f"[{timestamp}] PPM: {self.ppm}")
+                    for r in results:
+                        power_db = 10 * np.log10(r["power"]) if r["power"] > 0 else -999
+                        print(f"  NOMINAL: {r['nominal']/1e6:.6f} MHz | PEAK: {r['peak_freq']/1e6:.6f} MHz | "
+                              f"OFFSET: {r['offset_hz']:.2f} Hz | Power: {power_db:.2f} dB")
+                else:
+                    power, precise_freq, actual_rate, offset_hz = self.measure_at(nominal_hz, num_samples)
+                    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                    power_db = 10 * np.log10(power) if power > 0 else -999
+                    print(f"[{timestamp}] FREQUENCY: {precise_freq/1e6:.6f} MHz | "
+                          f"OFFSET: {offset_hz:.2f} Hz | Power: {power_db:.2f} dB | PPM: {self.ppm}")
+
                 end_time = time.time() + interval
                 while time.time() < end_time:
                     self._handle_ppm_input()
@@ -140,44 +204,51 @@ class CarrierFinder:
 
     def close(self):
         self.sdr.close()
+
+
 def parse_args():
-        p = argparse.ArgumentParser(
-            description="RTL-SDR PPM calibrator.",
-            epilog="While running you can adjust the PPM correction interactively:\n"
-            " +  or  =   : increase PPM by 1\n"
-            " -  or  _   : decrease PPM by 1\n"
-            " ]  or  .   : increase PPM by 10\n"
-            " [  or  ,   : decrease PPM by 10\n"
-            " 0          : reset PPM to 0\n"
-            " q          : quit\n"
-            " \n",
-            formatter_class=argparse.RawTextHelpFormatter)
+    p = argparse.ArgumentParser(
+        description="RTL-SDR PPM calibrator.",
+        epilog="While running you can adjust the PPM correction interactively:\n"
+               " +  or  =   : increase PPM by 1\n"
+               " -  or  _   : decrease PPM by 1\n"
+               " ]  or  .   : increase PPM by 10\n"
+               " [  or  ,   : decrease PPM by 10\n"
+               " 0          : reset PPM to 0\n"
+               " q          : quit\n"
+               " \n",
+        formatter_class=argparse.RawTextHelpFormatter)
 
-        p.add_argument("freq", nargs='*', type=float,
-                       help="Frequency argument.\n")
-        p.add_argument("-i", "--interval", type=float, default="1",
-                       help="Seconds between measurements (default 1 sec)")
-        p.add_argument("-g", "--gain", type=str, default="auto",
-                       help="SDR Gain (default is 'auto' for AGC)")
-        p.add_argument("-r", "--rate", type=float, default="1.25",
-                       help="Sample rate in MHz (default 1.25 MHZ)")
-        p.add_argument("-n", "--samples", type=int, default="65536",
-                       help="Number of samples (default 65536)")
-    
-        args = p.parse_args()
+    p.add_argument("freq", nargs='*', type=float,
+                   help="One or more frequency arguments (Hz or MHz). Pass multiple freqs to monitor them together.\n")
+    p.add_argument("-i", "--interval", type=float, default=1.0,
+                   help="Seconds between measurements (default 1 sec)")
+    p.add_argument("-g", "--gain", type=str, default="auto",
+                   help="SDR Gain (default is 'auto' for AGC)")
+    p.add_argument("-r", "--rate", type=float, default=1.25,
+                   help="Sample rate in MHz (default 1.25 MHZ)")
+    p.add_argument("-n", "--samples", type=int, default=65536,
+                   help="Number of samples (default 65536)")
 
-        first_tune = None
-    
-        vals = args.freq
+    args = p.parse_args()
 
-        if len(vals) != 1:
-            p.error("Requires at least a frequency argument.")
-        freq_val = vals[0]
-        first_tune = freq_val if freq_val > 1e6 else freq_val * 1e6
-        return args, first_tune
+    vals = args.freq
+    if len(vals) < 1:
+        p.error("Requires at least one frequency argument.")
+
+    # Convert values to Hz (allow MHz short-hand if value <= 1e6)
+    freq_list = []
+    for v in vals:
+        hz = v if v > 1e6 else v * 1e6
+        freq_list.append(hz)
+
+    # Choose initial tuning center as midpoint of provided freqs
+    first_tune = (min(freq_list) + max(freq_list)) / 2.0
+    return args, first_tune, freq_list
+
 
 if __name__ == "__main__":
-    args, first_tune = parse_args()
+    args, first_tune, freq_list = parse_args()
     sample_rate = args.rate * 1e6
 
     try:
@@ -192,7 +263,11 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        finder.continuous_monitor(first_tune, args.interval, args.samples)
+        # If multiple frequencies were provided, monitor them together
+        if len(freq_list) > 1:
+            finder.continuous_monitor(freq_list, args.interval, args.samples)
+        else:
+            finder.continuous_monitor(first_tune, args.interval, args.samples)
     except KeyboardInterrupt:
         print("\nStopped by user.")
     except OSError as e:
