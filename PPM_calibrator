@@ -92,7 +92,11 @@ class CarrierFinder:
         self.sdr.freq_correction = self.ppm
 
     def measure_at(self, nominal_hz, num_samples):
-        """Measure power and precise frequency at a specific nominal frequency."""
+        """Measure power and precise frequency at a specific nominal frequency.
+
+        Uses parabolic interpolation on the FFT magnitude peak to improve
+        sub-bin frequency accuracy.
+        """
         actual_sample_rate = self.sdr.get_sample_rate()
         self.sdr.center_freq = nominal_hz
 
@@ -107,7 +111,21 @@ class CarrierFinder:
         peak_idx = int(np.argmax(mag))
         bin_hz = actual_sample_rate / n
 
-        offset_hz = (peak_idx - n // 2) * bin_hz   # peak vs. tuned center
+        # Parabolic (quadratic) interpolation around the peak for sub-bin accuracy
+        if 0 < peak_idx < n - 1:
+            m1 = mag[peak_idx - 1]
+            m2 = mag[peak_idx]
+            m3 = mag[peak_idx + 1]
+            denom = (m1 - 2.0 * m2 + m3)
+            if denom != 0.0:
+                delta = 0.5 * (m1 - m3) / denom
+            else:
+                delta = 0.0
+        else:
+            delta = 0.0
+
+        peak_bin = peak_idx + delta
+        offset_hz = (peak_bin - n // 2) * bin_hz   # peak vs. tuned center
         precise_freq = nominal_hz + offset_hz      # true carrier frequency
 
         return power, precise_freq, actual_sample_rate, offset_hz
@@ -115,6 +133,9 @@ class CarrierFinder:
     def measure_multiple(self, nominal_hz_list, num_samples):
         """Measure power and precise frequency for several nominal frequencies in one capture.
            nominal_hz_list: list of frequencies in Hz.
+
+           Uses parabolic interpolation for each detected peak to improve
+           sub-bin frequency accuracy.
         """
         # center at midpoint so all targets fit in the instantaneous bandwidth
         center = (min(nominal_hz_list) + max(nominal_hz_list)) / 2.0
@@ -140,7 +161,22 @@ class CarrierFinder:
             hi = min(n, idx_nom + win_bins + 1)
             rel = int(np.argmax(mag[lo:hi]))
             peak_idx = lo + rel
-            peak_freq = freqs[peak_idx]
+
+            # Parabolic interpolation using the three bins around the peak
+            if 0 < peak_idx < n - 1:
+                m1 = mag[peak_idx - 1]
+                m2 = mag[peak_idx]
+                m3 = mag[peak_idx + 1]
+                denom = (m1 - 2.0 * m2 + m3)
+                if denom != 0.0:
+                    delta = 0.5 * (m1 - m3) / denom
+                else:
+                    delta = 0.0
+            else:
+                delta = 0.0
+
+            peak_bin = peak_idx + delta
+            peak_freq = center + (peak_bin - n // 2) * bin_hz
             offset_hz = peak_freq - nom
             # estimate power (mean power across the capture)
             power = np.mean(np.abs(samples) ** 2)
