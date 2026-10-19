@@ -94,20 +94,24 @@ class CarrierFinder:
     def measure_at(self, nominal_hz, num_samples):
         """Measure power and precise frequency at a specific nominal frequency.
 
-        Uses parabolic interpolation on the FFT magnitude peak to improve
-        sub-bin frequency accuracy.
+        Uses a Hann window + parabolic interpolation and returns a narrowband
+        power estimate (sum of PSD bins in a small window around the peak).
+        The returned "power" is linear (not dB); callers convert to dB with
+        10*log10(power) as before.
         """
         actual_sample_rate = self.sdr.get_sample_rate()
         self.sdr.center_freq = nominal_hz
 
         samples = self.sdr.read_samples(num_samples)
-        power = np.mean(np.abs(samples) ** 2)
+        n = len(samples)
 
-        x = samples - np.mean(samples)
+        # Window the samples to reduce spectral leakage
+        w = np.hanning(n)
+        x = (samples - np.mean(samples)) * w
+
         fft_data = np.fft.fftshift(np.fft.fft(x))
         mag = np.abs(fft_data)
 
-        n = len(samples)
         peak_idx = int(np.argmax(mag))
         bin_hz = actual_sample_rate / n
 
@@ -128,14 +132,21 @@ class CarrierFinder:
         offset_hz = (peak_bin - n // 2) * bin_hz   # peak vs. tuned center
         precise_freq = nominal_hz + offset_hz      # true carrier frequency
 
-        return power, precise_freq, actual_sample_rate, offset_hz
+        # narrowband power: sum squared magnitudes (PSD) in a small window
+        win_bins = max(4, int(2.0 / max(bin_hz, 1e-12)))
+        lo = max(0, int(round(peak_idx - win_bins)))
+        hi = min(n, int(round(peak_idx + win_bins + 1)))
+        narrow_psd_sum = float(np.sum((mag[lo:hi] ** 2)))
+
+        return narrow_psd_sum, precise_freq, actual_sample_rate, offset_hz
 
     def measure_multiple(self, nominal_hz_list, num_samples):
         """Measure power and precise frequency for several nominal frequencies in one capture.
            nominal_hz_list: list of frequencies in Hz.
 
-           Uses parabolic interpolation for each detected peak to improve
-           sub-bin frequency accuracy.
+           Uses a Hann window + parabolic interpolation and computes a narrowband
+           PSD-based power for each target (returned as linear power; convert
+           to dB with 10*log10(power)).
         """
         # center at midpoint so all targets fit in the instantaneous bandwidth
         center = (min(nominal_hz_list) + max(nominal_hz_list)) / 2.0
@@ -143,11 +154,14 @@ class CarrierFinder:
         actual_sample_rate = self.sdr.get_sample_rate()
         samples = self.sdr.read_samples(num_samples)
 
-        x = samples - np.mean(samples)
+        n = len(samples)
+        # Window to reduce spectral leakage
+        w = np.hanning(n)
+        x = (samples - np.mean(samples)) * w
+
         fft_data = np.fft.fftshift(np.fft.fft(x))
         mag = np.abs(fft_data)
 
-        n = len(samples)
         bin_hz = actual_sample_rate / n
         freqs = center + (np.arange(n) - n // 2) * bin_hz
 
@@ -178,13 +192,17 @@ class CarrierFinder:
             peak_bin = peak_idx + delta
             peak_freq = center + (peak_bin - n // 2) * bin_hz
             offset_hz = peak_freq - nom
-            # estimate power (mean power across the capture)
-            power = np.mean(np.abs(samples) ** 2)
+
+            # compute narrowband power by summing squared magnitudes in the window
+            lo_sum = max(0, int(round(peak_idx - win_bins)))
+            hi_sum = min(n, int(round(peak_idx + win_bins + 1)))
+            narrow_psd_sum = float(np.sum((mag[lo_sum:hi_sum] ** 2)))
+
             results.append({
                 "nominal": nom,
                 "peak_freq": peak_freq,
                 "offset_hz": offset_hz,
-                "power": power,
+                "power": narrow_psd_sum,
                 "peak_bin_mag": float(mag[peak_idx])
             })
 
