@@ -41,12 +41,13 @@ import termios
 import tty
 import argparse
 
+
 class CarrierFinder:
     def __init__(self, center_freq=100e6, sample_rate=2.4e6, gain=50):
         self.sdr = RtlSdr()
         self.sdr.sample_rate = sample_rate
         self.sdr.center_freq = center_freq
-        
+
         if str(gain).lower() == "auto" or gain is None:
             self.sdr.gain = "auto"
             self.is_agc = True
@@ -58,7 +59,7 @@ class CarrierFinder:
                 print(f"Warning: Invalid gain '{gain}'. Falling back to AGC.")
                 self.sdr.gain = "auto"
                 self.is_agc = True
-        
+
         self.ppm = 0
         self._old_settings = None
 
@@ -94,28 +95,25 @@ class CarrierFinder:
     def measure_at(self, nominal_hz, num_samples):
         """Measure power and precise frequency at a specific nominal frequency.
 
-        Uses a Hann window + parabolic interpolation and returns a narrowband
-        power estimate (sum of PSD bins in a small window around the peak).
-        The returned "power" is linear (not dB); callers convert to dB with
-        10*log10(power) as before.
+        Power uses the legacy calibration method from the original script:
+        mean absolute sample power across the capture. Frequency estimation keeps
+        the later FFT peak + parabolic interpolation to reduce bin bias.
         """
         actual_sample_rate = self.sdr.get_sample_rate()
         self.sdr.center_freq = nominal_hz
 
         samples = self.sdr.read_samples(num_samples)
-        n = len(samples)
+        power = np.mean(np.abs(samples) ** 2)
 
-        # Window the samples to reduce spectral leakage
-        w = np.hanning(n)
-        x = (samples - np.mean(samples)) * w
-
+        x = samples - np.mean(samples)
         fft_data = np.fft.fftshift(np.fft.fft(x))
         mag = np.abs(fft_data)
 
+        n = len(samples)
         peak_idx = int(np.argmax(mag))
         bin_hz = actual_sample_rate / n
 
-        # Parabolic (quadratic) interpolation around the peak for sub-bin accuracy
+        # Parabolic interpolation around the FFT peak for better sub-bin estimate
         if 0 < peak_idx < n - 1:
             m1 = mag[peak_idx - 1]
             m2 = mag[peak_idx]
@@ -132,106 +130,25 @@ class CarrierFinder:
         offset_hz = (peak_bin - n // 2) * bin_hz   # peak vs. tuned center
         precise_freq = nominal_hz + offset_hz      # true carrier frequency
 
-        # narrowband power: sum squared magnitudes (PSD) in a small window
-        win_bins = max(4, int(2.0 / max(bin_hz, 1e-12)))
-        lo = max(0, int(round(peak_idx - win_bins)))
-        hi = min(n, int(round(peak_idx + win_bins + 1)))
-        narrow_psd_sum = float(np.sum((mag[lo:hi] ** 2)))
+        return power, precise_freq, actual_sample_rate, offset_hz
 
-        return narrow_psd_sum, precise_freq, actual_sample_rate, offset_hz
+    def continuous_monitor(self, nominal_hz, interval, num_samples):
+        """Monitor one or more frequencies by sequentially tuning each target.
 
-    def measure_multiple(self, nominal_hz_list, num_samples):
-        """Measure power and precise frequency for several nominal frequencies in one capture.
-           nominal_hz_list: list of frequencies in Hz.
-
-           Uses a Hann window + parabolic interpolation and computes a narrowband
-           PSD-based power for each target (returned as linear power; convert
-           to dB with 10*log10(power)).
-        """
-        # center at midpoint so all targets fit in the instantaneous bandwidth
-        center = (min(nominal_hz_list) + max(nominal_hz_list)) / 2.0
-        self.sdr.center_freq = center
-        actual_sample_rate = self.sdr.get_sample_rate()
-        samples = self.sdr.read_samples(num_samples)
-
-        n = len(samples)
-        # Window to reduce spectral leakage
-        w = np.hanning(n)
-        x = (samples - np.mean(samples)) * w
-
-        fft_data = np.fft.fftshift(np.fft.fft(x))
-        mag = np.abs(fft_data)
-
-        bin_hz = actual_sample_rate / n
-        freqs = center + (np.arange(n) - n // 2) * bin_hz
-
-        results = []
-        for nom in nominal_hz_list:
-            # find nearest bin to the nominal frequency
-            idx_nom = int(np.argmin(np.abs(freqs - nom)))
-            # small search window around expected bin to find the precise peak
-            win_bins = max(4, int(2.0 / max(bin_hz, 1e-12)))
-            lo = max(0, idx_nom - win_bins)
-            hi = min(n, idx_nom + win_bins + 1)
-            rel = int(np.argmax(mag[lo:hi]))
-            peak_idx = lo + rel
-
-            # Parabolic interpolation using the three bins around the peak
-            if 0 < peak_idx < n - 1:
-                m1 = mag[peak_idx - 1]
-                m2 = mag[peak_idx]
-                m3 = mag[peak_idx + 1]
-                denom = (m1 - 2.0 * m2 + m3)
-                if denom != 0.0:
-                    delta = 0.5 * (m1 - m3) / denom
-                else:
-                    delta = 0.0
-            else:
-                delta = 0.0
-
-            peak_bin = peak_idx + delta
-            peak_freq = center + (peak_bin - n // 2) * bin_hz
-            offset_hz = peak_freq - nom
-
-            # compute narrowband power by summing squared magnitudes in the window
-            lo_sum = max(0, int(round(peak_idx - win_bins)))
-            hi_sum = min(n, int(round(peak_idx + win_bins + 1)))
-            narrow_psd_sum = float(np.sum((mag[lo_sum:hi_sum] ** 2)))
-
-            results.append({
-                "nominal": nom,
-                "peak_freq": peak_freq,
-                "offset_hz": offset_hz,
-                "power": narrow_psd_sum,
-                "peak_bin_mag": float(mag[peak_idx])
-            })
-
-        return results, actual_sample_rate
-
-    def continuous_monitor(self, nominal_hz, interval, num_samples, scan=False):
-        """If nominal_hz is a list, monitor multiple frequencies in the same capture.
-
-        If scan=True and nominal_hz is a list, sequentially tune to each frequency
-        (one capture per frequency) and report results. This is a simple scan mode
-        that can match the previous behaviour where each frequency was measured
-        by tuning the SDR to that frequency.
+        Multiple frequencies are handled by sequential retuning and measurement,
+        which avoids the whole-band capture issues that were causing misleading
+        comparisons between nearby carriers.
         """
         self._setup_terminal()
         gain_display = "AGC" if self.is_agc else f"{self.sdr.gain:.1f} dB"
 
         multi = isinstance(nominal_hz, (list, tuple))
-        if multi and not scan:
-            freqs_mhz = ", ".join(f"{f/1e6:.6f}" for f in nominal_hz)
-            print(f"Monitoring multiple: {freqs_mhz} MHz (single capture)")
-            # set center once at midpoint
-            center = (min(nominal_hz) + max(nominal_hz)) / 2.0
-            self.sdr.center_freq = center
-        elif multi and scan:
-            freqs_mhz = ", ".join(f"{f/1e6:.6f}" for f in nominal_hz)
-            print(f"Scanning frequencies: {freqs_mhz} MHz (sequential tune)")
+        freq_list = nominal_hz if multi else [nominal_hz]
+
+        if multi:
+            print(f"Scanning (sequential) frequencies: {', '.join(f'{f/1e6:.6f}' for f in freq_list)} MHz")
         else:
-            print(f"Monitoring: {nominal_hz/1e6:.6f} MHz")
-            self.sdr.center_freq = nominal_hz
+            print(f"Monitoring: {freq_list[0]/1e6:.6f} MHz")
 
         actual_rate = self.sdr.get_sample_rate()
         print(f"Actual Sample Rate: {actual_rate/1e6:.12f} MHz | Samples: {num_samples} | Gain: {gain_display}")
@@ -239,31 +156,16 @@ class CarrierFinder:
         print("Adjust PPM until OFFSET is as close to ZERO as you can or")
         print("until FREQUENCY matches expected station freq")
         print("Press Q to QUIT\n")
+
         try:
             while True:
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                if multi:
-                    if scan:
-                        # sequentially tune & measure each frequency
-                        print(f"[{timestamp}] PPM: {self.ppm}")
-                        for f in nominal_hz:
-                            power, precise_freq, actual_rate, offset_hz = self.measure_at(f, num_samples)
-                            power_db = 10 * np.log10(power) if power > 0 else -999
-                            print(f"  NOMINAL: {f/1e6:.6f} MHz | PEAK: {precise_freq/1e6:.6f} MHz | "
-                                  f"OFFSET: {offset_hz:.2f} Hz | Power: {power_db:.2f} dB")
-                    else:
-                        # single capture across the band (existing multi-target mode)
-                        results, actual_rate = self.measure_multiple(nominal_hz, num_samples)
-                        print(f"[{timestamp}] PPM: {self.ppm}")
-                        for r in results:
-                            power_db = 10 * np.log10(r["power"]) if r["power"] > 0 else -999
-                            print(f"  NOMINAL: {r['nominal']/1e6:.6f} MHz | PEAK: {r['peak_freq']/1e6:.6f} MHz | "
-                                  f"OFFSET: {r['offset_hz']:.2f} Hz | Power: {power_db:.2f} dB")
-                else:
-                    power, precise_freq, actual_rate, offset_hz = self.measure_at(nominal_hz, num_samples)
+                print(f"[{timestamp}] PPM: {self.ppm}")
+                for f in freq_list:
+                    power, precise_freq, actual_rate, offset_hz = self.measure_at(f, num_samples)
                     power_db = 10 * np.log10(power) if power > 0 else -999
-                    print(f"[{timestamp}] FREQUENCY: {precise_freq/1e6:.6f} MHz | "
-                          f"OFFSET: {offset_hz:.2f} Hz | Power: {power_db:.2f} dB | PPM: {self.ppm}")
+                    print(f"  NOMINAL: {f/1e6:.6f} MHz | PEAK: {precise_freq/1e6:.6f} MHz | "
+                          f"OFFSET: {offset_hz:.2f} Hz | Power: {power_db:.2f} dB")
 
                 end_time = time.time() + interval
                 while time.time() < end_time:
@@ -301,8 +203,6 @@ def parse_args():
                    help="Sample rate in MHz (default 1.25 MHZ)")
     p.add_argument("-n", "--samples", type=int, default=65536,
                    help="Number of samples (default 65536)")
-    p.add_argument("--scan", action="store_true",
-                   help="When multiple frequencies are provided, sequentially tune and measure each frequency instead of capturing the whole band at once. By default this is automatically enabled when exactly two frequencies are provided.")
 
     args = p.parse_args()
 
@@ -310,13 +210,11 @@ def parse_args():
     if len(vals) < 1:
         p.error("Requires at least one frequency argument.")
 
-    # Convert values to Hz (allow MHz short-hand if value <= 1e6)
     freq_list = []
     for v in vals:
         hz = v if v > 1e6 else v * 1e6
         freq_list.append(hz)
 
-    # Choose initial tuning center as midpoint of provided freqs
     first_tune = (min(freq_list) + max(freq_list)) / 2.0
     return args, first_tune, freq_list
 
@@ -337,12 +235,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        # If multiple frequencies were provided, monitor them together
-        scan_mode = args.scan or (len(freq_list) == 2)
         if len(freq_list) > 1:
-            finder.continuous_monitor(freq_list, args.interval, args.samples, scan=scan_mode)
+            finder.continuous_monitor(freq_list, args.interval, args.samples)
         else:
-            finder.continuous_monitor(first_tune, args.interval, args.samples, scan=scan_mode)
+            finder.continuous_monitor(first_tune, args.interval, args.samples)
     except KeyboardInterrupt:
         print("\nStopped by user.")
     except OSError as e:
