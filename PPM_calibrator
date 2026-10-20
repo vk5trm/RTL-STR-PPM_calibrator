@@ -43,10 +43,11 @@ import argparse
 
 
 class CarrierFinder:
-    def __init__(self, center_freq=100e6, sample_rate=2.4e6, gain=50):
+    def __init__(self, center_freq=100e6, sample_rate=2.4e6, gain=50, measurement_bandwidth_hz=12.5e3):
         self.sdr = RtlSdr()
         self.sdr.sample_rate = sample_rate
         self.sdr.center_freq = center_freq
+        self.measurement_bandwidth_hz = float(measurement_bandwidth_hz)
 
         if str(gain).lower() == "auto" or gain is None:
             self.sdr.gain = "auto"
@@ -97,7 +98,8 @@ class CarrierFinder:
 
         Power uses the legacy calibration method from the original script:
         mean absolute sample power across the capture. Frequency estimation keeps
-        the later FFT peak + parabolic interpolation to reduce bin bias.
+        the later FFT peak + parabolic interpolation to reduce bin bias, but only
+        within a narrow measurement band around the tuned center frequency.
         """
         actual_sample_rate = self.sdr.get_sample_rate()
         self.sdr.center_freq = nominal_hz
@@ -110,10 +112,20 @@ class CarrierFinder:
         mag = np.abs(fft_data)
 
         n = len(samples)
+        freq_axis_hz = np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / actual_sample_rate))
+        half_width_hz = self.measurement_bandwidth_hz
+
+        # Limit the analysis to a narrow slice around the tuned frequency.
+        # This ignores any nearby/strong carriers outside +/-12.5 kHz and keeps
+        # the estimate focused on the target station or carrier.
+        mask = np.abs(freq_axis_hz) <= half_width_hz
+        if np.any(mask):
+            mag = mag * mask
+
         peak_idx = int(np.argmax(mag))
         bin_hz = actual_sample_rate / n
 
-        # Parabolic interpolation around the FFT peak for better sub-bin estimate
+        # Parabolic interpolation around the FFT peak for better sub-bin estimate.
         if 0 < peak_idx < n - 1:
             m1 = mag[peak_idx - 1]
             m2 = mag[peak_idx]
@@ -152,6 +164,7 @@ class CarrierFinder:
 
         actual_rate = self.sdr.get_sample_rate()
         print(f"Actual Sample Rate: {actual_rate/1e6:.12f} MHz | Samples: {num_samples} | Gain: {gain_display}")
+        print(f"Measurement window: +/- {self.measurement_bandwidth_hz / 1e3:.1f} kHz")
         print("Keys: +/- = PPM 1   ]/. = PPM 10   [/ , = PPM -10   0 = reset")
         print("Adjust PPM until OFFSET is as close to ZERO as you can or")
         print("until FREQUENCY matches expected station freq")
@@ -203,6 +216,8 @@ def parse_args():
                    help="Sample rate in MHz (default 1.25 MHZ)")
     p.add_argument("-n", "--samples", type=int, default=65536,
                    help="Number of samples (default 65536)")
+    p.add_argument("--bandwidth", type=float, default=12.5e3,
+                   help="Only inspect signals within +/- BANDWIDTH Hz of each tuned frequency (default 12.5 kHz)")
 
     args = p.parse_args()
 
@@ -224,7 +239,8 @@ if __name__ == "__main__":
     sample_rate = args.rate * 1e6
 
     try:
-        finder = CarrierFinder(center_freq=first_tune, sample_rate=sample_rate, gain=args.gain)
+        finder = CarrierFinder(center_freq=first_tune, sample_rate=sample_rate, gain=args.gain,
+                              measurement_bandwidth_hz=args.bandwidth)
     except Exception as e:
         error_msg = str(e)
         if "Resource busy" in error_msg or "LIBUSB_ERROR_BUSY" in error_msg:
