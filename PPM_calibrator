@@ -96,32 +96,29 @@ class CarrierFinder:
     def measure_at(self, nominal_hz, num_samples):
         """Measure power and precise frequency at a specific nominal frequency.
 
-        Power uses the legacy calibration method from the original script:
-        mean absolute sample power across the capture. Frequency estimation keeps
-        the later FFT peak + parabolic interpolation to reduce bin bias, but only
-        within a narrow measurement band around the tuned center frequency.
+        Both the carrier search and the reported power are band-limited to the
+        requested measurement window, ignoring all energy outside +/- measurement
+        bandwidth around the tuned center frequency.
         """
         actual_sample_rate = self.sdr.get_sample_rate()
         self.sdr.center_freq = nominal_hz
 
         samples = self.sdr.read_samples(num_samples)
-        power = np.mean(np.abs(samples) ** 2)
-
         x = samples - np.mean(samples)
         fft_data = np.fft.fftshift(np.fft.fft(x))
-        mag = np.abs(fft_data)
+        freq_axis_hz = np.fft.fftshift(np.fft.fftfreq(len(samples), d=1.0 / actual_sample_rate))
+        band_mask = np.abs(freq_axis_hz) <= self.measurement_bandwidth_hz
+
+        if np.any(band_mask):
+            band_power = np.mean(np.abs(fft_data[band_mask]) ** 2)
+            power = float(band_power)
+            mag = np.abs(fft_data)
+            mag = np.where(band_mask, mag, 0.0)
+        else:
+            power = 0.0
+            mag = np.zeros_like(np.abs(fft_data))
 
         n = len(samples)
-        freq_axis_hz = np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / actual_sample_rate))
-        half_width_hz = self.measurement_bandwidth_hz
-
-        # Limit the analysis to a narrow slice around the tuned frequency.
-        # This ignores any nearby/strong carriers outside +/-12.5 kHz and keeps
-        # the estimate focused on the target station or carrier.
-        mask = np.abs(freq_axis_hz) <= half_width_hz
-        if np.any(mask):
-            mag = mag * mask
-
         peak_idx = int(np.argmax(mag))
         bin_hz = actual_sample_rate / n
 
