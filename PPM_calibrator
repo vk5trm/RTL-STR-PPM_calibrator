@@ -216,7 +216,7 @@ def parse_args():
                    help="Sample rate in MHz (default 1.25 MHZ)")
     p.add_argument("-n", "--samples", type=int, default=65536,
                    help="Number of samples (default 65536)")
-    p.add_argument("--bandwidth", type=float, default=12.5e3,
+    p.add_argument("-b", "--bandwidth", type=float, default=12.5e3,
                    help="Only inspect signals within +/- BANDWIDTH Hz of each tuned frequency (default 12.5 kHz)")
 
     args = p.parse_args()
