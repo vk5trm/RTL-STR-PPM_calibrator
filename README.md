@@ -6,7 +6,7 @@ This utility helps you tune to a frequency and adjust the SDR's frequency correc
 
 ## Features
 
-- Tune to a specific RF frequency
+- Tune to a specific RF frequency or multiply frequencys
 - Measure received power and the precise peak frequency
 - Adjust frequency correction in real time using keyboard controls
 - Useful for calibrating RTL-SDR PPM offset
@@ -44,7 +44,11 @@ Run the script with a target frequency in MHz:
 ```bash
 ./PPM_calibrator 401.5
 ```
+Run the script with a multiply target frequencys in MHz:
 
+```bash
+./PPM_calibrator 401.5 402.0
+```
 Monitor the same frequency every 2 seconds:
 
 ```bash
@@ -64,12 +68,13 @@ Advanced options:
 ```
 Detailed help
 ```bash
-RTL-SDR carrier finder / PPM calibrator.
+usage: PPM_calibrator [-h] [-i INTERVAL] [-g GAIN] [-r RATE] [-n SAMPLES] [-b BANDWIDTH]
+                      [freq ...]
 
-usage: PPM_calibrator [-h] [--scan] [-i INTERVAL] [-g GAIN] [--rate RATE] [-n SAMPLES] [freqs ...]
+RTL-SDR PPM calibrator.
 
 positional arguments:
-  freq                  Frequency argument.
+  freq                  One or more frequency arguments (Hz or MHz). Pass multiple freqs to monitor them together.
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -79,6 +84,8 @@ optional arguments:
   -r RATE, --rate RATE  Sample rate in MHz (default 1.25 MHZ)
   -n SAMPLES, --samples SAMPLES
                         Number of samples (default 65536)
+  -b BANDWIDTH, --bandwidth BANDWIDTH
+                        Only inspect signals within +/- BANDWIDTH Hz of each tuned frequency (default 12.5 kHz)
 
 While running you can adjust the PPM correction interactively:
  +  or  =   : increase PPM by 1
@@ -87,6 +94,7 @@ While running you can adjust the PPM correction interactively:
  [  or  ,   : decrease PPM by 10
  0          : reset PPM to 0
  q          : quit
+
 
 
 ```
@@ -103,7 +111,7 @@ Adjust PPM until OFFSET is as close to ZERO as you can or
 until FREQUENCY matches expected station freq
 Press Q to QUIT
 
-[2026-01-01 12:00:00] FREQUENCY: 401.999981 MHz | OFFSET: -19.07 Hz | Power: 0.72 dB | PPM: -2
+[2026-01-01 12:00:00] FREQUENCY: 401.999981 MHz | OFFSET: -19.07 Hz | Power: 0.72 dBm | PPM: -2
 ```
 
 A measured frequency differing from the expected station frequency usually indicates the SDR's tuning offset needs calibration.

@@ -173,9 +173,9 @@ class CarrierFinder:
                 print(f"[{timestamp}] PPM: {self.ppm}")
                 for f in freq_list:
                     power, precise_freq, actual_rate, offset_hz = self.measure_at(f, num_samples)
-                    power_db = 10 * np.log10(power) if power > 0 else -999
+                    power_dbm = 10 * np.log10(power) - 66 if power > 0 else -999
                     print(f"  NOMINAL: {f/1e6:.6f} MHz | PEAK: {precise_freq/1e6:.6f} MHz | "
-                          f"OFFSET: {offset_hz:.2f} Hz | Power: {power_db:.2f} dB")
+                          f"OFFSET: {offset_hz:.2f} Hz | Power: {power_dbm:.2f} dBm")
 
                 end_time = time.time() + interval
                 while time.time() < end_time:
