@@ -41,12 +41,14 @@ import termios
 import tty
 import argparse
 
+
 class CarrierFinder:
-    def __init__(self, center_freq=100e6, sample_rate=2.4e6, gain=50):
+    def __init__(self, center_freq=100e6, sample_rate=2.4e6, gain=50, measurement_bandwidth_hz=12.5e3):
         self.sdr = RtlSdr()
         self.sdr.sample_rate = sample_rate
         self.sdr.center_freq = center_freq
-        
+        self.measurement_bandwidth_hz = float(measurement_bandwidth_hz)
+
         if str(gain).lower() == "auto" or gain is None:
             self.sdr.gain = "auto"
             self.is_agc = True
@@ -58,7 +60,7 @@ class CarrierFinder:
                 print(f"Warning: Invalid gain '{gain}'. Falling back to AGC.")
                 self.sdr.gain = "auto"
                 self.is_agc = True
-        
+
         self.ppm = 0
         self._old_settings = None
 
@@ -92,43 +94,79 @@ class CarrierFinder:
         self.sdr.freq_correction = self.ppm
 
     def measure_at(self, nominal_hz, num_samples):
-        """Measure power and precise frequency at a specific nominal frequency."""
+        # Measure power and precise frequency at a specific nominal frequency.
         actual_sample_rate = self.sdr.get_sample_rate()
         self.sdr.center_freq = nominal_hz
 
         samples = self.sdr.read_samples(num_samples)
-        power = np.mean(np.abs(samples) ** 2)
-
         x = samples - np.mean(samples)
         fft_data = np.fft.fftshift(np.fft.fft(x))
-        mag = np.abs(fft_data)
+        freq_axis_hz = np.fft.fftshift(np.fft.fftfreq(len(samples), d=1.0 / actual_sample_rate))
+        band_mask = np.abs(freq_axis_hz) <= self.measurement_bandwidth_hz
+
+        if np.any(band_mask):
+            band_power = np.mean(np.abs(fft_data[band_mask]) ** 2)
+            power = float(band_power)
+            mag = np.abs(fft_data)
+            mag = np.where(band_mask, mag, 0.0)
+        else:
+            power = 0.0
+            mag = np.zeros_like(np.abs(fft_data))
 
         n = len(samples)
         peak_idx = int(np.argmax(mag))
         bin_hz = actual_sample_rate / n
 
-        offset_hz = (peak_idx - n // 2) * bin_hz   # peak vs. tuned center
+        # Parabolic interpolation around the FFT peak for better sub-bin estimate.
+        if 0 < peak_idx < n - 1:
+            m1 = mag[peak_idx - 1]
+            m2 = mag[peak_idx]
+            m3 = mag[peak_idx + 1]
+            denom = (m1 - 2.0 * m2 + m3)
+            if denom != 0.0:
+                delta = 0.5 * (m1 - m3) / denom
+            else:
+                delta = 0.0
+        else:
+            delta = 0.0
+
+        peak_bin = peak_idx + delta
+        offset_hz = (peak_bin - n // 2) * bin_hz   # peak vs. tuned center
         precise_freq = nominal_hz + offset_hz      # true carrier frequency
 
         return power, precise_freq, actual_sample_rate, offset_hz
 
     def continuous_monitor(self, nominal_hz, interval, num_samples):
+        # Monitor one or more frequencies by sequentially tuning each target.
         self._setup_terminal()
-        actual_rate = self.sdr.get_sample_rate()
         gain_display = "AGC" if self.is_agc else f"{self.sdr.gain:.1f} dB"
-        print(f"Monitoring: {nominal_hz/1e6:.6f} MHz")
+
+        multi = isinstance(nominal_hz, (list, tuple))
+        freq_list = nominal_hz if multi else [nominal_hz]
+
+        if multi:
+            print(f"Scanning (sequential) frequencies: {', '.join(f'{f/1e6:.6f}' for f in freq_list)} MHz")
+        else:
+            print(f"Monitoring: {freq_list[0]/1e6:.6f} MHz")
+
+        actual_rate = self.sdr.get_sample_rate()
         print(f"Actual Sample Rate: {actual_rate/1e6:.12f} MHz | Samples: {num_samples} | Gain: {gain_display}")
+        print(f"Measurement window: +/- {self.measurement_bandwidth_hz / 1e3:.1f} kHz")
         print("Keys: +/- = PPM 1   ]/. = PPM 10   [/ , = PPM -10   0 = reset")
         print("Adjust PPM until OFFSET is as close to ZERO as you can or")
         print("until FREQUENCY matches expected station freq")
         print("Press Q to QUIT\n")
+
         try:
             while True:
-                power, precise_freq, actual_rate, offset_hz = self.measure_at(nominal_hz, num_samples)
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                power_db = 10 * np.log10(power) if power > 0 else -999
-                print(f"[{timestamp}] FREQUENCY: {precise_freq/1e6:.6f} MHz | "
-                      f"OFFSET: {offset_hz:.2f} Hz | Power: {power_db:.2f} dB | PPM: {self.ppm}")
+                print(f"[{timestamp}] PPM: {self.ppm}")
+                for f in freq_list:
+                    power, precise_freq, actual_rate, offset_hz = self.measure_at(f, num_samples)
+                    power_dbm = 10 * np.log10(power) - 66 if power > 0 else -999
+                    print(f"  FREQUENCY: {precise_freq/1e6:.6f} MHz | "
+                          f"OFFSET: {offset_hz:.2f} Hz | Power: {power_dbm:.2f} dBm")
+
                 end_time = time.time() + interval
                 while time.time() < end_time:
                     self._handle_ppm_input()
@@ -140,48 +178,56 @@ class CarrierFinder:
 
     def close(self):
         self.sdr.close()
+
+
 def parse_args():
-        p = argparse.ArgumentParser(
-            description="RTL-SDR PPM calibrator.",
-            epilog="While running you can adjust the PPM correction interactively:\n"
-            " +  or  =   : increase PPM by 1\n"
-            " -  or  _   : decrease PPM by 1\n"
-            " ]  or  .   : increase PPM by 10\n"
-            " [  or  ,   : decrease PPM by 10\n"
-            " 0          : reset PPM to 0\n"
-            " q          : quit\n"
-            " \n",
-            formatter_class=argparse.RawTextHelpFormatter)
+    p = argparse.ArgumentParser(
+        description="RTL-SDR PPM calibrator.",
+        epilog="While running you can adjust the PPM correction interactively:\n"
+               " +  or  =   : increase PPM by 1\n"
+               " -  or  _   : decrease PPM by 1\n"
+               " ]  or  .   : increase PPM by 10\n"
+               " [  or  ,   : decrease PPM by 10\n"
+               " 0          : reset PPM to 0\n"
+               " q          : quit\n"
+               " \n",
+        formatter_class=argparse.RawTextHelpFormatter)
 
-        p.add_argument("freq", nargs='*', type=float,
-                       help="Frequency argument.\n")
-        p.add_argument("-i", "--interval", type=float, default="1",
-                       help="Seconds between measurements (default 1 sec)")
-        p.add_argument("-g", "--gain", type=str, default="auto",
-                       help="SDR Gain (default is 'auto' for AGC)")
-        p.add_argument("-r", "--rate", type=float, default="1.25",
-                       help="Sample rate in MHz (default 1.25 MHZ)")
-        p.add_argument("-n", "--samples", type=int, default="65536",
-                       help="Number of samples (default 65536)")
-    
-        args = p.parse_args()
+    p.add_argument("freq", nargs='*', type=float,
+                   help="One or more frequency arguments (Hz or MHz). Pass multiple freqs to monitor them together.\n")
+    p.add_argument("-i", "--interval", type=float, default=1.0,
+                   help="Seconds between measurements (default 1 sec)")
+    p.add_argument("-g", "--gain", type=str, default="auto",
+                   help="SDR Gain (default is 'auto' for AGC)")
+    p.add_argument("-r", "--rate", type=float, default=1.25,
+                   help="Sample rate in MHz (default 1.25 MHZ)")
+    p.add_argument("-n", "--samples", type=int, default=65536,
+                   help="Number of samples (default 65536)")
+    p.add_argument("-b", "--bandwidth", type=float, default=12.5e3,
+                   help="Only inspect signals within +/- BANDWIDTH Hz of each tuned frequency (default 12.5 kHz)")
 
-        first_tune = None
-    
-        vals = args.freq
+    args = p.parse_args()
 
-        if len(vals) != 1:
-            p.error("Requires at least a frequency argument.")
-        freq_val = vals[0]
-        first_tune = freq_val if freq_val > 1e6 else freq_val * 1e6
-        return args, first_tune
+    vals = args.freq
+    if len(vals) < 1:
+        p.error("Requires at least one frequency argument.")
+
+    freq_list = []
+    for v in vals:
+        hz = v if v > 1e6 else v * 1e6
+        freq_list.append(hz)
+
+    first_tune = (min(freq_list) + max(freq_list)) / 2.0
+    return args, first_tune, freq_list
+
 
 if __name__ == "__main__":
-    args, first_tune = parse_args()
+    args, first_tune, freq_list = parse_args()
     sample_rate = args.rate * 1e6
 
     try:
-        finder = CarrierFinder(center_freq=first_tune, sample_rate=sample_rate, gain=args.gain)
+        finder = CarrierFinder(center_freq=first_tune, sample_rate=sample_rate, gain=args.gain,
+                              measurement_bandwidth_hz=args.bandwidth)
     except Exception as e:
         error_msg = str(e)
         if "Resource busy" in error_msg or "LIBUSB_ERROR_BUSY" in error_msg:
@@ -192,7 +238,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        finder.continuous_monitor(first_tune, args.interval, args.samples)
+        if len(freq_list) > 1:
+            finder.continuous_monitor(freq_list, args.interval, args.samples)
+        else:
+            finder.continuous_monitor(first_tune, args.interval, args.samples)
     except KeyboardInterrupt:
         print("\nStopped by user.")
     except OSError as e:
