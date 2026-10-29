@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 #
 # RTL-SDR PPM calibrator.
 # Author: Robert Middelmann (vk5trm)
@@ -21,6 +22,11 @@
 
 import numpy as np
 import rtlsdr.rtlsdr as _rtlsdr_mod
+import time
+import sys
+import argparse
+import os
+
 _sync_names = ['RtlSdr', 'RtlSdrSync', 'RtlSdrDevice']
 RtlSdr = None
 for _name in _sync_names:
@@ -34,12 +40,6 @@ if RtlSdr is None:
         "Could not find synchronous RtlSdr class. "
         "Update pyrtlsdr: pip3 install --upgrade pyrtlsdr"
     )
-import time
-import sys
-import select
-import termios
-import tty
-import argparse
 
 
 class CarrierFinder:
@@ -62,20 +62,35 @@ class CarrierFinder:
                 self.is_agc = True
 
         self.ppm = 0
-        self._old_settings = None
 
     def _setup_terminal(self):
-        self._old_settings = termios.tcgetattr(sys.stdin)
-        tty.setcbreak(sys.stdin.fileno())
+        if os.name == "nt":
+            pass  # no-op on Windows
+        else:
+            import termios
+            import tty
+            self._old_settings = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
 
     def _restore_terminal(self):
-        if self._old_settings:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
+        if os.name == "nt":
+            pass  # no-op on Windows
+        else:
+            import termios
+            if hasattr(self, '_old_settings'):
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old_settings)
 
     def _get_key(self):
-        if select.select([sys.stdin], [], [], 0)[0]:
-            return sys.stdin.read(1)
-        return None
+        if os.name == "nt":
+            import msvcrt
+            if msvcrt.kbhit():
+                return msvcrt.getwch()
+            return None
+        else:
+            import select
+            if select.select([sys.stdin], [], [], 0)[0]:
+                return sys.stdin.read(1)
+            return None
 
     def _handle_ppm_input(self):
         key = self._get_key()
@@ -132,7 +147,7 @@ class CarrierFinder:
 
         peak_bin = peak_idx + delta
         offset_hz = (peak_bin - n // 2) * bin_hz   # peak vs. tuned center
-        precise_freq = nominal_hz + offset_hz      # true carrier frequency
+        precise_freq = nominal_hz + offset_hz       # true carrier frequency
 
         return power, precise_freq, actual_sample_rate, offset_hz
 

@@ -10,30 +10,42 @@ This utility helps you tune to a frequency and adjust the SDR's frequency correc
 - Measure received power and the precise peak frequency
 - Adjust frequency correction in real time using keyboard controls
 - Useful for calibrating RTL-SDR PPM offset
-- Works with the `pyrtlsdr` / `rtlsdr` Python library
+- Works with the `pyrtlsdr` / `rtlsdr` Python library now on both Windows amd Linux
 
-## Requirements
+## Requirements 
 
-- Python 3
-- RTL-SDR USB dongle
-- `numpy`
-- `pyrtlsdr` (or the `rtlsdr` package used by this project)
+- **Python 3.8–3.12 recommended**
+- **numpy** – array/sample processing
+- **pyrtlsdr** – Python bindings for librtlsdr
+- **pyrtlsdr[lib]** – extra that bundles the native DLLs (avoids manual DLL setup)
+- **RTL-SDR USB dongle (RTL2832U-based)**
 
-## Getting Started
-
-### 1. Install the Python dependencies:
+### 1. Install the Python dependencies (Linux):
 
 ```bash
 pip install numpy pyrtlsdr
 ```
 
+### 1. Install the Python dependencies (Windows)
+
+```Bash
+py -m pip install numpy pyrtlsdr "pyrtlsdr[lib]"
+```
+
+### USB driver (Windows)
+- Run **Zadig** with the RTL-SDR plugged in and install the **WinUSB** driver
+  (there may be two Bulk-In interfaces — install WinUSB on both)[2].
+  Without this, librtlsdr can't claim the device even when DLLs load fine.
+
+## Getting Started
+
 ### 2. Clone the Repository:
    ```bash
 git clone https://github.com/vk5trm/RTL-STR-PPM_calibrator.git
    ```
-### 3. Make it executable
+### 3. Make it executable (Linux)
    ```bash
-chmod +x PPM_calibrator
+chmod +x RTL-SDR_calibrator.py
 ```
 If your environment uses a system RTL-SDR library, ensure the USB device is available and not already in use by another application.
 
@@ -42,29 +54,29 @@ If your environment uses a system RTL-SDR library, ensure the USB device is avai
 Run the script with a target frequency in MHz:
 
 ```bash
-./PPM_calibrator 401.5
+RTL-SDR_calibrator.py 401.5
 ```
 Run the script with a multiply target frequencys in MHz:
 
 ```bash
-./PPM_calibrator 401.5 402.0
+RTL-SDR_calibrator.py 401.5 402.0
 ```
 Monitor the same frequency every 2 seconds:
 
 ```bash
-./PPM_calibrator 401.5 -i 2
+RTL-SDR_calibrator.py 401.5 -i 2
 ```
 
 Set the frequency and gain and monitor every 2 secconds:
 
 ```bash
-./PPM_calibrator -g 20 -i 2 401.5
+RTL-SDR_calibrator.py -g 20 -i 2 401.5
 ```
 
 Advanced options:
 
 ```bash
-./PPM_calibrator --help
+RTL-SDR_calibrator.py --help
 ```
 Detailed help
 ```bash
