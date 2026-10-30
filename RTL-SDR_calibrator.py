@@ -8,12 +8,12 @@
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 2 of the License, or
 # (at your option) any later version.
-
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-
+#
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
@@ -26,6 +26,7 @@ import time
 import sys
 import argparse
 import os
+
 
 _sync_names = ['RtlSdr', 'RtlSdrSync', 'RtlSdrDevice']
 RtlSdr = None
@@ -42,9 +43,50 @@ if RtlSdr is None:
     )
 
 
+def _detect_device():
+    """Try to open the RTL-SDR device and return it.
+    
+    Prints helpful error messages for common failure modes and exits
+    on fatal errors. Returns the RtlSdr instance on success.
+    """
+    try:
+        sdr = RtlSdr()
+        # Quick sanity check: try reading the serial. 
+        # If the device is present but busy, this will raise immediately.
+        _ = sdr.serial_number
+    except AttributeError:
+            # If serial_number isn't available, just proceed. 
+            # The fact that we got here means the device opened successfully.
+        pass 
+    except OSError as e:
+        msg = str(e).lower()
+        
+        if "resource busy" in msg or "libusb_error_busy" in msg:
+            print("Error: The SDR device is busy.")
+            print("Please close any other SDR applications (SDR#, SDR++, GQRX, etc.)")
+            print("that might be using the dongle, then try again.")
+        elif "no supported devices" in msg or "no rtlsdr" in msg:
+            print("Error: No supported RTL-SDR device found.")
+            print("Troubleshooting:")
+            print("  - Ensure the dongle is plugged in.")
+            print("  - Linux: Check 'dmesg | tail' for USB errors; ensure you are in the 'plugdev' or 'dialout' group.")
+            print("  - Windows: Ensure Zadig installed the WinUSB driver for the device.")
+            print("  - Try running with sudo (Linux) or as Administrator (Windows) to rule out permissions.")
+        elif "libusb_error" in msg:
+            print(f"Error: USB communication failed ({e}).")
+            print("Try a different USB port or cable.")
+        else:
+            print(f"Error: Failed to open SDR device: {e}")
+        
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error opening SDR: {e}")
+        sys.exit(1)
+    return sdr
+
 class CarrierFinder:
-    def __init__(self, center_freq=100e6, sample_rate=2.4e6, gain=50, measurement_bandwidth_hz=12.5e3):
-        self.sdr = RtlSdr()
+    def __init__(self, sdr, center_freq=100e6, sample_rate=2.4e6, gain=50, measurement_bandwidth_hz=12.5e3):
+        self.sdr = sdr
         self.sdr.sample_rate = sample_rate
         self.sdr.center_freq = center_freq
         self.measurement_bandwidth_hz = float(measurement_bandwidth_hz)
@@ -240,16 +282,16 @@ if __name__ == "__main__":
     args, first_tune, freq_list = parse_args()
     sample_rate = args.rate * 1e6
 
+    # --- NEW: Detect and validate device before doing anything else ---
+    sdr_device = _detect_device()
+
     try:
-        finder = CarrierFinder(center_freq=first_tune, sample_rate=sample_rate, gain=args.gain,
-                              measurement_bandwidth_hz=args.bandwidth)
+        finder = CarrierFinder(sdr=sdr_device, center_freq=first_tune, sample_rate=sample_rate,
+                              gain=args.gain, measurement_bandwidth_hz=args.bandwidth)
     except Exception as e:
-        error_msg = str(e)
-        if "Resource busy" in error_msg or "LIBUSB_ERROR_BUSY" in error_msg:
-            print("Error: The SDR device is busy. Please close other applications using it and try again.")
-        else:
-            print(f"Unexpected error opening SDR: {e}")
-            raise
+        # This block is a safety net; _detect_device() should have caught most issues
+        print(f"Unexpected error initializing calibrator: {e}")
+        sdr_device.close()
         sys.exit(1)
 
     try:
